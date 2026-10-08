@@ -1,0 +1,104 @@
+-- CC:Tweaked + Advanced Peripherals
+
+local mobName = "Cow"
+
+local minThreshold = 10
+local maxThreshold = 20
+
+local scanRange = 8
+local scanInterval = 1
+
+local redstoneSide = "back"
+local invertSignal = false
+
+-- SETUP -------------------------------
+
+local detector = peripheral.find("environment_detector")
+
+if not detector then
+    error("Environment Detector not found!")
+end
+
+if minThreshold >= maxThreshold then
+    error("Minimum must be below maximum!")
+end
+
+local active = false
+
+-- FUNCTIONS ---------------------------
+
+local function countMobs()
+    local entities = detector.scanEntities(scanRange)
+
+if type(entities) ~= "table" then
+    error("Entity scan failed: " .. tostring(entities))
+end
+
+    local count = 0
+
+    for _, entity in pairs(entities) do
+        if entity.name == mobName then
+            count = count + 1
+        end
+    end
+
+    return count
+end
+
+local function updateRedstone()
+    local output = active
+
+    if invertSignal then
+        output = not output
+    end
+
+    redstone.setOutput(redstoneSide, output)
+end
+
+local function displayStatus(count)
+    term.clear()
+    term.setCursorPos(1, 1)
+
+    print("=== MOB FARM CONTROLLER ===")
+    print("")
+    print("Mob: " .. mobName)
+    print("Detected: " .. count)
+    print("")
+    print("Minimum: " .. minThreshold)
+    print("Maximum: " .. maxThreshold)
+    print("")
+    print("Slaughter: " .. (active and "ON" or "OFF"))
+    print("Output: " .. redstoneSide)
+    print("")
+    print("Scan interval: " .. scanInterval .. "s")
+end
+
+-- MAIN LOOP ---------------------------
+
+local function main()
+    while true do
+        local count = countMobs()
+
+        if count >= maxThreshold then
+            active = true
+
+        elseif count <= minThreshold then
+            active = false
+        end
+
+        updateRedstone()
+        displayStatus(count)
+
+        sleep(scanInterval)
+    end
+end
+
+-- CLEANUP -----------------------------
+
+local ok, err = pcall(main)
+
+redstone.setOutput(redstoneSide, false)
+
+if not ok then
+    error(err, 0)
+end
