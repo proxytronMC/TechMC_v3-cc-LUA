@@ -6,14 +6,14 @@ local minThreshold = 10
 local maxThreshold = 20
 
 local scanRange = 8
-local scanInterval = 1
+local scanInterval = 2.5
 
 local redstoneSide = "back"
 local invertSignal = false
 
 -- SETUP -------------------------------
 
-local detector = peripheral.find("environment_detector")
+local detector = peripheral.find("environmentDetector")
 
 if not detector then
     error("Environment Detector not found!")
