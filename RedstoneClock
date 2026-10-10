@@ -1,1 +1,29 @@
 
+-- CONFIG --
+
+local inputSide = "left"
+local outputSide = "right"
+
+local pulseLength = 0.2
+local pulseInterval = 1
+
+-- MAIN LOOP --
+
+redstone.setOutput(outputSide, false)
+
+while true do
+    if redstone.getInput(inputSide) then
+
+        -- Turn output ON
+        redstone.setOutput(outputSide, true)
+        sleep(pulseLength)
+
+        -- Turn output OFF
+        redstone.setOutput(outputSide, false)
+        sleep(pulseInterval)
+
+    else
+        redstone.setOutput(outputSide, false)
+        sleep(0.1)
+    end
+end
