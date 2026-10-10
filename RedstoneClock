@@ -1,29 +1,40 @@
+-- CC:TWEAKED REDSTONE CLOCK
 
--- CONFIG --
+-- CONFIGURATION
+local inputSide = "right"
+local outputSide = "top"
 
-local inputSide = "left"
-local outputSide = "right"
+local pulseLength = 0.5
+local pulseInterval = 2
 
-local pulseLength = 0.2
-local pulseInterval = 1
+-- FUNCTIONS
+local function setOutput(state)
+    redstone.setOutput(outputSide, state)
 
--- MAIN LOOP --
+    term.clear()
+    term.setCursorPos(1, 1)
 
+    print("=== REDSTONE CLOCK ===")
+    print("")
+    print("Input: " .. tostring(redstone.getInput(inputSide)))
+    print("Output: " .. (state and "ON" or "OFF"))
+    print("")
+    print("Pulse length: " .. pulseLength .. "s")
+    print("Interval: " .. pulseInterval .. "s")
+end
+
+-- MAIN LOOP
 redstone.setOutput(outputSide, false)
 
 while true do
     if redstone.getInput(inputSide) then
-
-        -- Turn output ON
-        redstone.setOutput(outputSide, true)
+        setOutput(true)
         sleep(pulseLength)
 
-        -- Turn output OFF
-        redstone.setOutput(outputSide, false)
+        setOutput(false)
         sleep(pulseInterval)
-
     else
-        redstone.setOutput(outputSide, false)
+        setOutput(false)
         sleep(0.1)
     end
 end
