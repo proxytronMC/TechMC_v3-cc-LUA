@@ -1,0 +1,455 @@
+
+-- MOB FACTORY --
+
+-- CONFIG --
+
+local machineSide = "back"
+local pipeSide = "bottom"
+
+-- "bridge" = ME Bridge imports tool
+-- "pipe"   = redstone-powered extraction
+local scramMode = "pipe"
+
+local bridgeTarget = "right"
+local pipeDuration = 5
+local stateFile = "mobfarm_state"
+
+local pageSize = 6
+
+-- PERIPHERALS --
+
+local bridge = peripheral.find("meBridge")
+local monitor = peripheral.find("monitor")
+
+if not bridge then
+    error("ME Bridge not found!")
+end
+
+if not monitor then
+    error("Monitor not found!")
+end
+
+if scramMode ~= "bridge" and
+   scramMode ~= "pipe" then
+    error("Invalid SCRAM mode")
+end
+
+if machineSide == pipeSide then
+    error("Machine and pipe sides must differ")
+end
+
+local monitorName = peripheral.getName(monitor)
+
+monitor.setTextScale(0.5)
+
+-- VARIABLES --
+
+local tools = {}
+local page = 1
+local status = "IDLE"
+local activeTool = nil
+local message = "Ready"
+
+-- SAFETY --
+
+redstone.setOutput(machineSide, false)
+redstone.setOutput(pipeSide, false)
+
+-- STORAGE --
+
+local function saveState()
+    local file = fs.open(stateFile, "w")
+    file.write(textutils.serialize(activeTool))
+    file.close()
+end
+
+local function loadState()
+    if not fs.exists(stateFile) then
+        return
+    end
+
+    local file = fs.open(stateFile, "r")
+    local data = file.readAll()
+    file.close()
+
+    local ok, saved = pcall(
+        textutils.unserialize, data
+    )
+
+    if ok and type(saved) == "table" then
+        activeTool = saved
+        status = "RECOVERY"
+        message = "SCRAM required"
+    end
+end
+
+-- ITEM HELPERS --
+
+local function getMobName(item)
+    local display = item.displayName or ""
+
+    local mob = display:match(
+        "Mob Imprisonment Tool %((.-)%)"
+    )
+
+    if not mob then
+        return nil
+    end
+
+    return mob
+end
+
+local function friendlyName(mob)
+    local name = mob:match(":(.+)$") or mob
+
+    name = name:gsub("_", " ")
+
+    return name:sub(1, 1):upper()
+        .. name:sub(2)
+end
+
+local function transferCount(result)
+    if type(result) == "number" then
+        return result
+    end
+
+    if type(result) == "table" then
+        return tonumber(result.amount)
+            or tonumber(result.count)
+            or tonumber(result.transferred)
+            or 0
+    end
+
+    return 0
+end
+
+-- LIBRARY --
+
+local function refreshLibrary()
+    local ok, items = pcall(bridge.listItems)
+
+    if not ok or type(items) ~= "table" then
+        message = "Library scan failed"
+        return false
+    end
+
+    tools = {}
+
+    for _, item in pairs(items) do
+        local mob = getMobName(item)
+
+        if mob and item.fingerprint then
+            table.insert(tools, {
+                mob = mob,
+                name = friendlyName(mob),
+                fingerprint = item.fingerprint
+            })
+        end
+    end
+
+    table.sort(tools, function(a, b)
+        return a.name < b.name
+    end)
+
+    local maxPage = math.max(
+        1, math.ceil(#tools / pageSize)
+    )
+
+    page = math.min(page, maxPage)
+    message = "Library refreshed"
+    return true
+end
+
+-- MONITOR DRAWING --
+
+local buttons = {}
+
+local function writeAt(x, y, text, fg, bg)
+    local w, h = monitor.getSize()
+
+    if y < 1 or y > h or x > w then
+        return
+    end
+
+    monitor.setCursorPos(x, y)
+
+    if fg then monitor.setTextColor(fg) end
+    if bg then monitor.setBackgroundColor(bg) end
+
+    monitor.write(
+        tostring(text):sub(1, w - x + 1)
+    )
+end
+
+local function drawButton(y, label, colour, action)
+    local w, h = monitor.getSize()
+
+    if y > h then return end
+
+    monitor.setCursorPos(1, y)
+    monitor.setBackgroundColor(colour)
+    monitor.setTextColor(colors.white)
+    monitor.write(string.rep(" ", w))
+
+    writeAt(2, y, label, colors.white, colour)
+
+    buttons[y] = action
+end
+
+local function draw()
+    local w, h = monitor.getSize()
+
+    monitor.setBackgroundColor(colors.black)
+    monitor.setTextColor(colors.white)
+    monitor.clear()
+
+    buttons = {}
+
+    writeAt(2, 1, "MOB FARM CONTROLLER",
+        colors.cyan)
+
+    writeAt(2, 3, "STATUS: " .. status,
+        status == "ACTIVE"
+        and colors.lime
+        or colors.orange)
+
+    writeAt(2, 4, "MOB: " ..
+        (activeTool and activeTool.name or "NONE"),
+        colors.white)
+
+    writeAt(2, 6, message, colors.lightGray)
+
+    writeAt(2, 8, "AVAILABLE MOBS:",
+        colors.yellow)
+
+    local startIndex = (page - 1) * pageSize
+
+    for i = 1, pageSize do
+        local tool = tools[startIndex + i]
+
+        if tool then
+            local label = i .. ". " .. tool.name
+
+            drawButton(
+                9 + i,
+                label,
+                status == "IDLE"
+                    and colors.blue
+                    or colors.gray,
+                {type = "select", index = startIndex + i}
+            )
+        end
+    end
+
+    local maxPage = math.max(
+        1, math.ceil(#tools / pageSize)
+    )
+
+    local navY = h - 5
+
+    drawButton(
+        navY,
+        "< PAGE " .. page .. "/" .. maxPage
+            .. " >",
+        colors.gray,
+        {type = "page"}
+    )
+
+    drawButton(
+        h - 4,
+        "REFRESH LIBRARY",
+        colors.lightBlue,
+        {type = "refresh"}
+    )
+
+    if status == "RETURN_PENDING" then
+        drawButton(
+            h - 2,
+            "CONFIRM TOOL RETURNED",
+            colors.orange,
+            {type = "confirm"}
+        )
+    else
+        drawButton(
+            h - 2,
+            "SCRAM / RETURN TOOL",
+            colors.red,
+            {type = "scram"}
+        )
+    end
+end
+
+-- DEPLOYMENT ---------------------------
+
+local function deployTool(tool)
+    if status ~= "IDLE" or activeTool then
+        message = "SCRAM first"
+        return
+    end
+
+    if not tool then return end
+
+    status = "DEPLOYING"
+    message = "Exporting " .. tool.name
+    draw()
+
+    -- Save before moving the tool
+    activeTool = {
+        name = tool.name,
+        mob = tool.mob,
+        fingerprint = tool.fingerprint
+    }
+
+    saveState()
+
+    local filter = {
+        fingerprint = tool.fingerprint,
+        count = 1
+    }
+
+    local ok, result, err = pcall(
+        bridge.exportItem,
+        filter,
+        bridgeTarget
+    )
+
+    if not ok or transferCount(result) ~= 1 then
+        status = "RECOVERY"
+        message = "Export failed - check tool"
+        print("Export error:", result, err)
+        return
+    end
+
+    status = "ACTIVE"
+    message = "Tool exported"
+
+    redstone.setOutput(machineSide, true)
+end
+
+-- SCRAM --------------------------------
+
+local function scram()
+    -- Stop machine immediately
+    redstone.setOutput(machineSide, false)
+
+    if not activeTool then
+        status = "IDLE"
+        message = "Machine stopped"
+        return
+    end
+
+    status = "SCRAM"
+    message = "Returning tool"
+    draw()
+
+    if scramMode == "bridge" then
+
+        local filter = {
+            fingerprint = activeTool.fingerprint,
+            count = 1
+        }
+
+        local ok, result, err = pcall(
+            bridge.importItem,
+            filter,
+            bridgeTarget
+        )
+
+        if ok and transferCount(result) == 1 then
+            activeTool = nil
+            saveState()
+
+            status = "IDLE"
+            message = "Tool returned"
+            refreshLibrary()
+        else
+            status = "RECOVERY"
+            message = "Import failed - retry SCRAM"
+            print("Import error:", result, err)
+        end
+
+    elseif scramMode == "pipe" then
+
+        redstone.setOutput(pipeSide, true)
+        sleep(pipeDuration)
+        redstone.setOutput(pipeSide, false)
+
+        status = "RETURN_PENDING"
+        message = "Verify tool in library"
+    end
+end
+
+-- PIPE RETURN CONFIRMATION -------------
+
+local function confirmReturn()
+    if status ~= "RETURN_PENDING" then
+        return
+    end
+
+    activeTool = nil
+    saveState()
+
+    status = "IDLE"
+    refreshLibrary()
+    message = "Return confirmed"
+end
+
+-- STARTUP ------------------------------
+
+loadState()
+refreshLibrary()
+draw()
+
+-- EVENT LOOP ---------------------------
+
+while true do
+    local event, side, x, y = os.pullEventRaw()
+
+    if event == "terminate" then
+        redstone.setOutput(machineSide, false)
+        redstone.setOutput(pipeSide, false)
+        break
+    end
+
+    if event == "monitor_resize" then
+        draw()
+    end
+
+    if event == "monitor_touch"
+       and side == monitorName then
+
+        local button = buttons[y]
+
+        if button then
+            if button.type == "select" then
+                if status == "IDLE" then
+                    deployTool(tools[button.index])
+                end
+
+            elseif button.type == "scram" then
+                scram()
+
+            elseif button.type == "confirm" then
+                confirmReturn()
+
+            elseif button.type == "refresh" then
+                refreshLibrary()
+
+            elseif button.type == "page" then
+                local maxPage = math.max(
+                    1, math.ceil(#tools / pageSize)
+                )
+
+                page = page + 1
+
+                if page > maxPage then
+                    page = 1
+                end
+            end
+
+            draw()
+        end
+    end
+end
+
+print("Controller stopped. Machine OFF.")
