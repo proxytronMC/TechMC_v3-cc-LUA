@@ -1,0 +1,68 @@
+
+-- CONFIGURATION -----------------------
+
+local scanRange = 10
+local scanInterval = 0.5
+local redstoneSide = "top"
+local invertSignal = false
+
+-- SETUP -------------------------------
+
+local detector = peripheral.find("playerDetector")
+    or peripheral.find("player_detector")
+
+if not detector then
+    error("Player Detector not found!")
+end
+
+-- FUNCTIONS ---------------------------
+
+local function updateOutput(detected)
+    local output = detected
+
+    if invertSignal then
+        output = not output
+    end
+
+    redstone.setOutput(redstoneSide, output)
+end
+
+local function displayStatus(detected)
+    term.clear()
+    term.setCursorPos(1, 1)
+
+    print("=== PLAYER DETECTOR ===")
+    print("")
+    print("Range: " .. scanRange .. " blocks")
+    print("Player: " .. (detected and "DETECTED" or "NONE"))
+    print("")
+    print("Redstone: " ..
+        (detected and "ACTIVE" or "INACTIVE"))
+end
+
+-- MAIN LOOP ---------------------------
+
+redstone.setOutput(redstoneSide, false)
+
+local function main()
+    while true do
+        local detected = detector.isPlayersInRange(scanRange)
+
+        if type(detected) ~= "boolean" then
+            error("Player detection failed!")
+        end
+
+        updateOutput(detected)
+        displayStatus(detected)
+
+        sleep(scanInterval)
+    end
+end
+
+local ok, err = pcall(main)
+
+redstone.setOutput(redstoneSide, false)
+
+if not ok then
+    error(err, 0)
+end
