@@ -69,6 +69,13 @@ local function exportSurplus()
                 count = amount
             }, target)
 
+            print(
+                "EXPORT:", itemName,
+                "Requested:", amount,
+                "Result:", tostring(result),
+                "Error:", tostring(err)
+            )
+
             if type(result) == "number" then
                 exported[itemName] = result
             elseif type(result) == "table" then
