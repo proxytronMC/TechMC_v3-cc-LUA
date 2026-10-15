@@ -49,6 +49,8 @@ local lastError = nil
 
 -- SETTINGS ----------------------------
 
+local settingsFile = "surplus_reserves.txt"
+
 local function saveSettings()
     local file = fs.open(settingsFile, "w")
 
