@@ -41,7 +41,7 @@ local function getStock()
         if reserves[item.name] then
             stock[item.name] =
                 (stock[item.name] or 0)
-                + (tonumber(item.amount) or 0)
+                + (tonumber(item.count or item.amount) or 0)
         end
     end
 
