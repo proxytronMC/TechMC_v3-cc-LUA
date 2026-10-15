@@ -24,17 +24,15 @@ local reserves = {
 -- PERIPHERALS -------------------------
 
 local bridge = peripheral.find("meBridge")
-local monitor = peripheral.find("monitor")
+local monitor = peripheral.wrap(monitorName)
 
 if not bridge then
     error("ME Bridge not found")
 end
 
 if not monitor then
-    error("Monitor not found")
+    error("Monitor not found" .. monitorName)
 end
-
-local monitorName = peripheral.getName(monitor)
 
 monitor.setTextScale(0.5)
 
