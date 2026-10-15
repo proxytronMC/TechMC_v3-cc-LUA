@@ -1,0 +1,141 @@
+
+-- AE2 SURPLUS EXPORT CONTROLLER
+-- CONFIGURATION -----------------------
+
+-- Inventory location relative to ME Bridge
+local target = "back"
+
+-- Seconds between checks
+local scanInterval = 2
+
+-- Maximum items exported per operation
+local batchSize = 128
+
+-- Minimum stock to KEEP in AE2
+local reserves = {
+    ["minecraft:netherrack"] = 2500,
+    ["minecraft:soul_sand"] = 500,
+    ["minecraft:soul_soil"] = 128,
+    ["minecraft:gravel"] = 128,
+    ["minecraft:andesite"] = 1500,
+    ["minecraft:granite"] = 1500,
+    ["minecraft:diorite"] = 1500,
+    ["minecraft:end_stone"] = 128,
+}
+
+-- SETUP -------------------------------
+
+local bridge = peripheral.find("meBridge")
+
+if not bridge then
+    error("ME Bridge not found!")
+end
+
+-- FUNCTIONS ---------------------------
+
+local function getStock()
+    local items = bridge.listItems()
+    local stock = {}
+
+    for _, item in pairs(items) do
+        if reserves[item.name] then
+            stock[item.name] =
+                (stock[item.name] or 0)
+                + (tonumber(item.amount) or 0)
+        end
+    end
+
+    return stock
+end
+
+local function exportSurplus()
+    local stock = getStock()
+    local exported = {}
+
+    for itemName, reserve in pairs(reserves) do
+        local available = stock[itemName] or 0
+
+        local surplus = math.max(
+            0, available - reserve
+        )
+
+        if surplus > 0 then
+            local amount = math.min(
+                surplus, batchSize
+            )
+
+            local result, err = bridge.exportItem({
+                name = itemName,
+                count = amount
+            }, target)
+
+            if type(result) == "number" then
+                exported[itemName] = result
+            elseif type(result) == "table" then
+                exported[itemName] =
+                    tonumber(result.amount)
+                    or tonumber(result.count)
+                    or tonumber(result.transferred)
+                    or 0
+            else
+                exported[itemName] = 0
+                print("Export error: " .. itemName)
+                print(tostring(err))
+            end
+        end
+    end
+
+    return stock, exported
+end
+
+local function displayStatus(stock, exported)
+    term.clear()
+    term.setCursorPos(1, 1)
+
+    print("=== AE2 SURPLUS CONTROL ===")
+    print("Destination: " .. target)
+    print("")
+
+    local names = {}
+
+    for name in pairs(reserves) do
+        table.insert(names, name)
+    end
+
+    table.sort(names)
+
+    for _, name in ipairs(names) do
+        local available = stock[name] or 0
+        local reserve = reserves[name]
+        local moved = exported[name] or 0
+
+        print(name)
+        print("Stock: " .. available ..
+              " / Reserve: " .. reserve)
+
+        print("Exported: " .. moved)
+        print("")
+    end
+
+    print("Next scan: " .. scanInterval .. "s")
+end
+
+-- MAIN LOOP ---------------------------
+
+while true do
+    local ok, stock, exported = pcall(
+        exportSurplus
+    )
+
+    if ok then
+        displayStatus(stock, exported)
+    else
+        term.clear()
+        term.setCursorPos(1, 1)
+
+        print("SURPLUS CONTROLLER ERROR")
+        print(tostring(stock))
+    end
+
+    sleep(scanInterval)
+end
