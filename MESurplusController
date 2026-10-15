@@ -1,8 +1,10 @@
 
 -- AE2 SURPLUS EXPORT CONTROLLER
 -- CONFIGURATION -----------------------
--- EXPORT POSITION --
+
 local target = "back"
+
+local monitorName = "monitor_15"
 
 local scanInterval = 2
 local batchSize = 128
