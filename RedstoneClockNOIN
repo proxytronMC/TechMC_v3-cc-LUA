@@ -1,0 +1,29 @@
+
+-- CONFIGURATION
+local outputSide = "top"
+local pulseLength = 0.5      -- Pulse duration in seconds
+local pulseInterval = 2      -- Time between pulse starts (seconds)
+
+-- VALIDATION
+if pulseLength <= 0 or pulseInterval <= pulseLength then
+    error("Pulse interval must be greater than pulse length!")
+end
+
+-- MAIN LOOP
+redstone.setOutput(outputSide, false)
+
+print("=== REDSTONE CLOCK ===")
+print("Output side: " .. outputSide)
+print("Pulse length: " .. pulseLength .. "s")
+print("Pulse interval: " .. pulseInterval .. "s")
+print("Clock running...")
+
+while true do
+    -- Turn output ON
+    redstone.setOutput(outputSide, true)
+    sleep(pulseLength)
+
+    -- Turn output OFF
+    redstone.setOutput(outputSide, false)
+    sleep(pulseInterval - pulseLength)
+end
