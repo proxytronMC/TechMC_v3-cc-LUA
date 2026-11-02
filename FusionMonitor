@@ -3,8 +3,8 @@
 local CONFIG = {
   bridge = nil, -- peripheral name/side, or nil to find automatically
   monitor = nil, -- peripheral name/side, or nil to find automatically
-  interval = 5, -- seconds between snapshots
-  pageSeconds = 8,
+  interval = 0.5, -- seconds between snapshots
+  pageSeconds = 1,
   textScale = 0.5,
   redstoneMode = "bundled", -- "bundled" for IE interface connectors, "normal" for plain redstone
   activationSide = "top", -- top/bottom/front/back/left/right, relative to computer
@@ -12,10 +12,8 @@ local CONFIG = {
   activationChannel = colors.white, -- IE white channel: activation pulse output
   noFuelChannel = colors.red, -- IE red channel: NO FUEL input (high = alarm)
   pulseSeconds = 0.5,
+  inputPollSeconds = 0.2, -- Also poll: do not rely solely on redstone events.
   resources = {
-    { kind = "item", name = "mekanism:dust_lithium", label = "Lithium dust" },
-    { kind = "fluid", name = "modern_industrialization:deuterium", label = "Deuterium fluid" },
-    { kind = "chemical", name = "mekanism:lithium", label = "Lithium" },
     { kind = "chemical", name = "mekanismgenerators:deuterium", label = "Deuterium" },
     { kind = "chemical", name = "mekanismgenerators:tritium", label = "Tritium" },
   },
@@ -23,6 +21,7 @@ local CONFIG = {
 
 assert(CONFIG.interval > 0 and CONFIG.pageSeconds > 0, "Intervals must be positive")
 assert(CONFIG.pulseSeconds > 0, "Pulse duration must be positive")
+assert(CONFIG.inputPollSeconds > 0, "Input polling interval must be positive")
 assert(CONFIG.redstoneMode == "bundled" or CONFIG.redstoneMode == "normal",
   "redstoneMode must be bundled or normal")
 local validSides = { top = true, bottom = true, front = true, back = true, left = true, right = true }
@@ -58,6 +57,7 @@ local lastError
 local pulsing = false
 local activateButton, nextButton
 local noFuel = false
+local bundledInput, normalInput = 0, false
 
 local function setActivation(active)
   if CONFIG.redstoneMode == "bundled" then
@@ -75,10 +75,12 @@ local function setActivation(active)
 end
 
 local function readNoFuel()
+  bundledInput = redstone.getBundledInput(CONFIG.noFuelSide)
+  normalInput = redstone.getInput(CONFIG.noFuelSide)
   if CONFIG.redstoneMode == "bundled" then
-    return redstone.testBundledInput(CONFIG.noFuelSide, CONFIG.noFuelChannel)
+    return colors.test(bundledInput, CONFIG.noFuelChannel)
   end
-  return redstone.getInput(CONFIG.noFuelSide)
+  return normalInput
 end
 
 local function findBridge()
@@ -169,8 +171,7 @@ end
 
 local function draw()
   local width, height = monitor.getSize()
-  local capacity = math.max(1, math.floor((height - 5) / 3))
-  local pages = math.ceil(#CONFIG.resources / capacity)
+  local pages = #CONFIG.resources
   page = ((page - 1) % pages) + 1
   local function line(y, text, colour)
     if y < 1 or y > height then return end
@@ -180,27 +181,33 @@ local function draw()
   end
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
-  line(1, "FUSION CONTROL  " .. page .. "/" .. pages, colors.cyan)
-  line(2, noFuel and "NO FUEL" or "Fuel alarm: clear", noFuel and colors.red or colors.lime)
-  line(3, "Sample " .. CONFIG.interval .. "s | rates /s", colors.lightGray)
-  for slot = 1, capacity do
-    local i = (page - 1) * capacity + slot
-    local resource, value = CONFIG.resources[i], state[i]
-    if not resource then break end
-    local y = 4 + (slot - 1) * 3
-    local unit = resource.unit or (resource.kind == "item" and "items" or "mB")
-    line(y, resource.label or resource.name, colors.white)
+  line(1, "FUSION " .. page .. "/" .. pages, colors.cyan)
+  line(2, noFuel and "NO FUEL" or "ALARM: -", noFuel and colors.red or colors.lime)
+  -- One resource per page leaves a blank line between status, data and controls.
+  do
+    local resource, value = CONFIG.resources[page], state[page]
+    local unit = resource.unit or (resource.kind == "item" and "i" or "mB")
+    local shortNames = {
+      ["mekanism:dust_lithium"] = "Li dust",
+      ["modern_industrialization:deuterium"] = "D2 fluid",
+      ["mekanism:lithium"] = "Li gas",
+      ["mekanismgenerators:deuterium"] = "D2 gas",
+      ["mekanismgenerators:tritium"] = "T2 gas",
+    }
+    line(4, resource.shortLabel or shortNames[resource.name] or resource.label or resource.name)
     if not value or value.error then
-      line(y + 1, "ERROR: " .. (value and value.error or "No sample"), colors.red)
+      line(5, "ME ERROR", colors.red)
     else
-      line(y + 1, "Stock " .. number(value.amount) .. " " .. unit, colors.lightGray)
+      line(5, "S " .. number(value.amount) .. " " .. unit, colors.lightGray)
       if value.rate then
         local colour = value.rate > 0 and colors.lime or (value.rate < 0 and colors.red or colors.lightGray)
-        line(y + 2, number(value.rate, true) .. "/s  d " .. number(value.delta, true), colour)
+        line(6, "R " .. number(value.rate, true) .. "/s", colour)
+        line(7, "D " .. number(value.delta, true), colour)
       else
-        line(y + 2, "Measuring next interval...", colors.yellow)
+        line(6, "WAIT...", colors.yellow)
       end
     end
+    if height >= 12 then line(height - 3, "dt " .. CONFIG.interval .. "s", colors.gray) end
   end
   local function button(x, text, background)
     monitor.setCursorPos(x, height - 1)
@@ -210,9 +217,10 @@ local function draw()
     monitor.setBackgroundColor(colors.black)
     return { x1 = x, x2 = x + #text - 1, y = height - 1 }
   end
-  activateButton = button(1, pulsing and " PULSING  " or " ACTIVATE ", pulsing and colors.orange or colors.green)
-  nextButton = button(width - 7, " NEXT > ", colors.blue)
-  line(height, lastError and "Read error; retrying next sample" or "Net change = production - usage", lastError and colors.red or colors.gray)
+  activateButton = button(1, pulsing and " PULSE " or " ACT ", pulsing and colors.orange or colors.green)
+  nextButton = button(width - 4, " > ", colors.blue)
+  -- Raw bundled mask in hex: red alone is 4000. Plain input is shown as I.
+  line(height, string.format("B:%04X I:%d", bundledInput, normalInput and 1 or 0), colors.gray)
 end
 
 local function contains(button, x, y)
@@ -228,6 +236,18 @@ local function pulseWorker()
     setActivation(false)
     pulsing = false
     os.queueEvent("fusion_pulse_finished")
+  end
+end
+
+local function inputWorker()
+  while true do
+    local oldBundled, oldNormal = bundledInput, normalInput
+    local alarm = readNoFuel()
+    if alarm ~= noFuel or oldBundled ~= bundledInput or oldNormal ~= normalInput then
+      noFuel = alarm
+      os.queueEvent("fusion_input_changed")
+    end
+    sleep(CONFIG.inputPollSeconds)
   end
 end
 
@@ -258,7 +278,7 @@ local function runDisplay()
         page = page + 1
       end
       draw()
-    elseif event == "redstone" or event == "fusion_pulse_finished" then
+    elseif event == "redstone" or event == "fusion_pulse_finished" or event == "fusion_input_changed" then
       noFuel = readNoFuel()
       draw()
     elseif event == "monitor_resize" and id == monitorName then
@@ -269,7 +289,7 @@ end
 
 setActivation(false)
 local ok, err = pcall(function()
-  parallel.waitForAny(pulseWorker, runDisplay)
+  parallel.waitForAny(pulseWorker, inputWorker, runDisplay)
 end)
 -- Also clear the activation output on Ctrl+T or a runtime error.
 setActivation(false)
