@@ -151,7 +151,8 @@ local function snapshot()
       if previous and previous.time and now > previous.time then
         nextState.delta = amount - previous.amount
         nextState.elapsed = now - previous.time
-        nextState.rate = nextState.delta / nextState.elapsed
+        -- Net stock change per nominal Minecraft tick (20 ticks/second).
+        nextState.rate = nextState.delta / (nextState.elapsed * 20)
       end
       state[i] = nextState
     end
@@ -171,7 +172,8 @@ end
 
 local function draw()
   local width, height = monitor.getSize()
-  local pages = #CONFIG.resources
+  local capacity = math.max(1, math.floor((height - 6) / 3))
+  local pages = math.ceil(#CONFIG.resources / capacity)
   page = ((page - 1) % pages) + 1
   local function line(y, text, colour)
     if y < 1 or y > height then return end
@@ -183,9 +185,13 @@ local function draw()
   monitor.clear()
   line(1, "FUSION " .. page .. "/" .. pages, colors.cyan)
   line(2, noFuel and "NO FUEL" or "ALARM: -", noFuel and colors.red or colors.lime)
-  -- One resource per page leaves a blank line between status, data and controls.
-  do
-    local resource, value = CONFIG.resources[page], state[page]
+  -- Show both configured isotopes together on a 2x1 monitor at scale 0.5.
+  -- Each resource gets a label, a rate, and a blank spacer row.
+  for slot = 1, capacity do
+    local index = (page - 1) * capacity + slot
+    local resource, value = CONFIG.resources[index], state[index]
+    if not resource then break end
+    local y = 4 + (slot - 1) * 3
     local unit = resource.unit or (resource.kind == "item" and "i" or "mB")
     local shortNames = {
       ["mekanism:dust_lithium"] = "Li dust",
@@ -194,20 +200,17 @@ local function draw()
       ["mekanismgenerators:deuterium"] = "D2 gas",
       ["mekanismgenerators:tritium"] = "T2 gas",
     }
-    line(4, resource.shortLabel or shortNames[resource.name] or resource.label or resource.name)
+    line(y, resource.shortLabel or shortNames[resource.name] or resource.label or resource.name)
     if not value or value.error then
-      line(5, "ME ERROR", colors.red)
+      line(y + 1, "ME ERROR", colors.red)
     else
-      line(5, "S " .. number(value.amount) .. " " .. unit, colors.lightGray)
       if value.rate then
         local colour = value.rate > 0 and colors.lime or (value.rate < 0 and colors.red or colors.lightGray)
-        line(6, "R " .. number(value.rate, true) .. "/s", colour)
-        line(7, "D " .. number(value.delta, true), colour)
+        line(y + 1, number(value.rate, true) .. " " .. unit .. "/t", colour)
       else
-        line(6, "WAIT...", colors.yellow)
+        line(y + 1, "WAIT...", colors.yellow)
       end
     end
-    if height >= 12 then line(height - 3, "dt " .. CONFIG.interval .. "s", colors.gray) end
   end
   local function button(x, text, background)
     monitor.setCursorPos(x, height - 1)
