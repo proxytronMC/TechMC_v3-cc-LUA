@@ -1,11 +1,17 @@
 -- Run on a CC:Tweaked computer connected to an AP ME Bridge and 2x1 monitor.
-
+-- Edit CONFIG, then run: throughput
 local CONFIG = {
   bridge = nil, -- peripheral name/side, or nil to find automatically
   monitor = nil, -- peripheral name/side, or nil to find automatically
   interval = 5, -- seconds between snapshots
   pageSeconds = 8,
   textScale = 0.5,
+  redstoneMode = "bundled", -- "bundled" for IE interface connectors, "normal" for plain redstone
+  activationSide = "top", -- top/bottom/front/back/left/right, relative to computer
+  noFuelSide = "top", -- Can share the activation side when using different bundled colors.
+  activationChannel = colors.white, -- IE white channel: activation pulse output
+  noFuelChannel = colors.red, -- IE red channel: NO FUEL input (high = alarm)
+  pulseSeconds = 0.5,
   resources = {
     { kind = "item", name = "mekanism:dust_lithium", label = "Lithium dust" },
     { kind = "fluid", name = "modern_industrialization:deuterium", label = "Deuterium fluid" },
@@ -16,6 +22,23 @@ local CONFIG = {
 }
 
 assert(CONFIG.interval > 0 and CONFIG.pageSeconds > 0, "Intervals must be positive")
+assert(CONFIG.pulseSeconds > 0, "Pulse duration must be positive")
+assert(CONFIG.redstoneMode == "bundled" or CONFIG.redstoneMode == "normal",
+  "redstoneMode must be bundled or normal")
+local validSides = { top = true, bottom = true, front = true, back = true, left = true, right = true }
+assert(validSides[CONFIG.activationSide] and validSides[CONFIG.noFuelSide], "Invalid redstone side")
+if CONFIG.redstoneMode == "bundled" then
+  local function validChannel(channel)
+    for bit = 0, 15 do
+      if channel == 2 ^ bit then return true end
+    end
+    return false
+  end
+  assert(validChannel(CONFIG.activationChannel) and validChannel(CONFIG.noFuelChannel),
+    "Bundled channels must each be one colors.* value")
+  assert(CONFIG.activationSide ~= CONFIG.noFuelSide or CONFIG.activationChannel ~= CONFIG.noFuelChannel,
+    "Use different bundled channels for activation and NO FUEL on the same side")
+end
 assert(#CONFIG.resources > 0, "Configure at least one resource")
 local readers = {
   item = { "getItems", "listItems" },
@@ -32,6 +55,31 @@ local monitorName = peripheral.getName(monitor)
 monitor.setTextScale(CONFIG.textScale)
 local state, page = {}, 1
 local lastError
+local pulsing = false
+local activateButton, nextButton
+local noFuel = false
+
+local function setActivation(active)
+  if CONFIG.redstoneMode == "bundled" then
+    -- Modify only our activation channel; leave other output colors alone.
+    local output = redstone.getBundledOutput(CONFIG.activationSide)
+    if active then
+      output = colors.combine(output, CONFIG.activationChannel)
+    else
+      output = colors.subtract(output, CONFIG.activationChannel)
+    end
+    redstone.setBundledOutput(CONFIG.activationSide, output)
+  else
+    redstone.setOutput(CONFIG.activationSide, active)
+  end
+end
+
+local function readNoFuel()
+  if CONFIG.redstoneMode == "bundled" then
+    return redstone.testBundledInput(CONFIG.noFuelSide, CONFIG.noFuelChannel)
+  end
+  return redstone.getInput(CONFIG.noFuelSide)
+end
 
 local function findBridge()
   if CONFIG.bridge then return peripheral.wrap(CONFIG.bridge) end
@@ -121,7 +169,7 @@ end
 
 local function draw()
   local width, height = monitor.getSize()
-  local capacity = math.max(1, math.floor((height - 3) / 3))
+  local capacity = math.max(1, math.floor((height - 5) / 3))
   local pages = math.ceil(#CONFIG.resources / capacity)
   page = ((page - 1) % pages) + 1
   local function line(y, text, colour)
@@ -132,13 +180,14 @@ local function draw()
   end
   monitor.setBackgroundColor(colors.black)
   monitor.clear()
-  line(1, "ME NET CHANGE  " .. page .. "/" .. pages, colors.cyan)
-  line(2, "Sample " .. CONFIG.interval .. "s | rates /s", colors.lightGray)
+  line(1, "FUSION CONTROL  " .. page .. "/" .. pages, colors.cyan)
+  line(2, noFuel and "NO FUEL" or "Fuel alarm: clear", noFuel and colors.red or colors.lime)
+  line(3, "Sample " .. CONFIG.interval .. "s | rates /s", colors.lightGray)
   for slot = 1, capacity do
     local i = (page - 1) * capacity + slot
     local resource, value = CONFIG.resources[i], state[i]
     if not resource then break end
-    local y = 3 + (slot - 1) * 3
+    local y = 4 + (slot - 1) * 3
     local unit = resource.unit or (resource.kind == "item" and "items" or "mB")
     line(y, resource.label or resource.name, colors.white)
     if not value or value.error then
@@ -153,28 +202,75 @@ local function draw()
       end
     end
   end
-  line(height, lastError and "Read error; retrying next sample" or "Touch: next page | net stock change", lastError and colors.red or colors.gray)
+  local function button(x, text, background)
+    monitor.setCursorPos(x, height - 1)
+    monitor.setBackgroundColor(background)
+    monitor.setTextColor(colors.white)
+    monitor.write(text)
+    monitor.setBackgroundColor(colors.black)
+    return { x1 = x, x2 = x + #text - 1, y = height - 1 }
+  end
+  activateButton = button(1, pulsing and " PULSING  " or " ACTIVATE ", pulsing and colors.orange or colors.green)
+  nextButton = button(width - 7, " NEXT > ", colors.blue)
+  line(height, lastError and "Read error; retrying next sample" or "Net change = production - usage", lastError and colors.red or colors.gray)
 end
 
-print("ME throughput monitor running. Ctrl+T to stop.")
-snapshot()
-draw()
-local sampleTimer = os.startTimer(CONFIG.interval)
-local pageTimer = os.startTimer(CONFIG.pageSeconds)
-while true do
-  local event, id = os.pullEvent()
-  if event == "timer" and id == sampleTimer then
-    snapshot()
-    sampleTimer = os.startTimer(CONFIG.interval)
-    draw()
-  elseif event == "timer" and id == pageTimer then
-    page = page + 1
-    pageTimer = os.startTimer(CONFIG.pageSeconds)
-    draw()
-  elseif event == "monitor_touch" and id == monitorName then
-    page = page + 1
-    draw()
-  elseif event == "monitor_resize" and id == monitorName then
-    draw()
+local function contains(button, x, y)
+  return button and y == button.y and x >= button.x1 and x <= button.x2
+end
+
+-- Keep pulse timing independent of slow bridge queries or monitor redraws.
+local function pulseWorker()
+  while true do
+    os.pullEvent("fusion_activate")
+    setActivation(true)
+    sleep(CONFIG.pulseSeconds)
+    setActivation(false)
+    pulsing = false
+    os.queueEvent("fusion_pulse_finished")
   end
 end
+
+local function runDisplay()
+  print("Fusion controller running. Ctrl+T to stop.")
+  noFuel = readNoFuel()
+  draw()
+  snapshot()
+  draw()
+  local sampleTimer = os.startTimer(CONFIG.interval)
+  local pageTimer = os.startTimer(CONFIG.pageSeconds)
+  while true do
+    local event, id, x, y = os.pullEvent()
+    if event == "timer" and id == sampleTimer then
+      snapshot()
+      sampleTimer = os.startTimer(CONFIG.interval)
+      noFuel = readNoFuel()
+      draw()
+    elseif event == "timer" and id == pageTimer then
+      page = page + 1
+      pageTimer = os.startTimer(CONFIG.pageSeconds)
+      draw()
+    elseif event == "monitor_touch" and id == monitorName then
+      if contains(activateButton, x, y) and not pulsing then
+        pulsing = true
+        os.queueEvent("fusion_activate")
+      elseif contains(nextButton, x, y) then
+        page = page + 1
+      end
+      draw()
+    elseif event == "redstone" or event == "fusion_pulse_finished" then
+      noFuel = readNoFuel()
+      draw()
+    elseif event == "monitor_resize" and id == monitorName then
+      draw()
+    end
+  end
+end
+
+setActivation(false)
+local ok, err = pcall(function()
+  parallel.waitForAny(pulseWorker, runDisplay)
+end)
+-- Also clear the activation output on Ctrl+T or a runtime error.
+setActivation(false)
+if not ok then error(err, 0) end
